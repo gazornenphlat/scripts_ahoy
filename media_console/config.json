@@ -1,0 +1,9 @@
+{
+    "ffmpeg": "ffmpeg",
+    "ffprobe": "ffprobe",
+    "rar_path": "C:\\Program Files\\WinRAR\\Rar.exe",
+    "tv_dupes_dir": "N:\\TV Shows\\D",
+    "report_dir": "N:\\",
+    "duration_tolerance_seconds": 1.0,
+    "reboot_delay_seconds": 30
+}
