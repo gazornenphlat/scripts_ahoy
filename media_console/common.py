@@ -25,9 +25,60 @@ def error(msg: str) -> None:
     say(msg, RED)
 
 
-def load_config() -> dict:
-    with open(BASE_DIR / "config.json", encoding="utf-8") as f:
-        return json.load(f)
+class ConfigError(Exception):
+    """Raised when config.json is missing, unreadable, or has invalid values."""
+
+
+# key -> (expected type(s), minimum value or None)
+REQUIRED_CONFIG = {
+    "ffmpeg": (str, None),
+    "ffprobe": (str, None),
+    "rar_path": (str, None),
+    "tv_dupes_dir": (str, None),
+    "report_dir": (str, None),
+    "duration_tolerance_seconds": ((int, float), 0),
+    "reboot_delay_seconds": (int, 0),
+}
+
+
+def validate_config(cfg) -> list:
+    """Return a list of human-readable problems. An empty list means the config is valid."""
+    if not isinstance(cfg, dict):
+        return ["config must be a JSON object"]
+    problems = []
+    for key, (types, minimum) in REQUIRED_CONFIG.items():
+        if key not in cfg:
+            problems.append(f"missing key: {key}")
+            continue
+        value = cfg[key]
+        # bool is a subclass of int in Python; reject it explicitly.
+        if isinstance(value, bool) or not isinstance(value, types):
+            problems.append(f"{key}: expected {types.__name__ if isinstance(types, type) else 'number'}, got {type(value).__name__}")
+            continue
+        if isinstance(value, str) and not value.strip():
+            problems.append(f"{key}: must not be empty")
+        if minimum is not None and value < minimum:
+            problems.append(f"{key}: must be at least {minimum}, got {value}")
+    unknown = sorted(set(cfg) - set(REQUIRED_CONFIG))
+    if unknown:
+        problems.append(f"unknown key(s), check for typos: {', '.join(unknown)}")
+    return problems
+
+
+def load_config(path=None) -> dict:
+    """Load and validate config.json. Raises ConfigError listing every problem found."""
+    path = Path(path) if path else BASE_DIR / "config.json"
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        raise ConfigError(f"config file not found: {path}") from None
+    except json.JSONDecodeError as e:
+        raise ConfigError(f"config is not valid JSON ({path}): {e}") from None
+    problems = validate_config(cfg)
+    if problems:
+        raise ConfigError("config.json has problems:\n  - " + "\n  - ".join(problems))
+    return cfg
 
 
 def have_command(cmd: str) -> bool:

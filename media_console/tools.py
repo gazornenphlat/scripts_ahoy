@@ -15,10 +15,18 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from common import (AMBER, ask_dir, confirm, error, have_command, load_config,
-                    pause, probe_duration, say, warn)
+import sys
 
-CFG = load_config()
+from common import (AMBER, ConfigError, ask_dir, confirm, error, have_command,
+                    load_config, pause, probe_duration, say, warn)
+
+try:
+    CFG = load_config()
+except ConfigError as e:
+    print(f"ERROR: {e}")
+    print("Fix config.json and start again.")
+    sys.exit(1)
+
 DRY_RUN = True
 
 AUDIO_EXTS = (".mp3", ".flac", ".m4a")
@@ -26,6 +34,57 @@ VIDEO_EXTS = (".mkv", ".mp4", ".avi")
 PRIORITY = {".mkv": 1, ".mp4": 2, ".avi": 3}
 FLAC_ARGS = ["-vn", "-map_metadata", "0", "-id3v2_version", "3", "-b:a", "320k"]
 MKA_ARGS = ["-vn", "-ar", "44100", "-ac", "2", "-b:a", "320k"]
+EPISODE_RE = re.compile(r"S\d{2}E\d{2}", re.IGNORECASE)
+
+
+# ---------- pure helpers (no filesystem changes; these are what the tests cover) ----------
+
+def find_episode_dupes(videos):
+    """Group video paths by SxxEyy code and keep only codes with more than one file."""
+    episodes = {}
+    for p in videos:
+        m = EPISODE_RE.search(Path(p).stem)
+        if m:
+            episodes.setdefault(m.group(0).upper(), []).append(Path(p))
+    return {ep: fs for ep, fs in sorted(episodes.items()) if len(fs) > 1}
+
+
+def rank_copies(paths):
+    """Order copies best first: MKV, then MP4, then AVI, then anything else."""
+    return sorted(paths, key=lambda p: PRIORITY.get(Path(p).suffix.lower(), 4))
+
+
+def plan_renames(root, needle, replacement):
+    """Return (planned, skipped) for renaming folders under root.
+
+    planned: list of (old_path, new_path), deepest folders first, so a parent's
+             path is still valid when its children are renamed.
+    skipped: list of (name, reason) for folders that cannot be renamed safely.
+    """
+    dirs = sorted((p for p in root.rglob("*") if p.is_dir() and needle in p.name),
+                  key=lambda p: len(p.parts), reverse=True)
+    planned, skipped, taken = [], [], set()
+    for d in dirs:
+        new_name = d.name.replace(needle, replacement).strip()
+        if not new_name:
+            # Check before with_name(): an empty name raises ValueError.
+            skipped.append((d.name, "new name would be empty"))
+            continue
+        dst = d.with_name(new_name)
+        if dst.exists() or dst in taken:
+            skipped.append((d.name, f"'{new_name}' already exists"))
+        else:
+            taken.add(dst)
+            planned.append((d, dst))
+    return planned, skipped
+
+
+def verify_conversion(return_code, duration_src, duration_out, tolerance):
+    """True only if ffmpeg succeeded and both durations are known and match within tolerance."""
+    if return_code != 0 or not duration_src or not duration_out:
+        # None or 0.0 both mean "unknown or empty": never delete on that.
+        return False
+    return abs(duration_src - duration_out) <= tolerance
 
 
 # ---------- shared plan / apply machinery ----------
@@ -91,12 +150,7 @@ def scan_duplicates():
          if f.lower().endswith(VIDEO_EXTS)),
         key=lambda p: str(p).lower(),
     )
-    episodes = {}
-    for p in videos:
-        m = re.search(r"S\d{2}E\d{2}", p.stem, re.IGNORECASE)
-        if m:
-            episodes.setdefault(m.group(0).upper(), []).append(p)
-    dupes = {ep: fs for ep, fs in sorted(episodes.items()) if len(fs) > 1}
+    dupes = find_episode_dupes(videos)
 
     now = datetime.now()
     report = Path(CFG["report_dir"]) / f"duplicate_scan_{now:%Y%m%d_%H%M%S}.txt"
@@ -106,7 +160,7 @@ def scan_duplicates():
         lf.write(f"Video files found: {len(videos)}\n")
         lf.write("Ranking: MKV > MP4 > AVI. This scan deletes nothing.\n\n")
         for ep, fs in dupes.items():
-            ranked = sorted(fs, key=lambda p: PRIORITY.get(p.suffix.lower(), 4))
+            ranked = rank_copies(fs)
             lf.write(f"{ep}  ({len(fs)} copies)\n")
             lf.write(f"  highest-ranked: {ranked[0]}\n")
             for p in ranked[1:]:
@@ -203,7 +257,7 @@ def convert_to_mp3(sources, extra, label):
         ).returncode
         d_src = probe_duration(src, ffprobe)
         d_out = probe_duration(out, ffprobe) if rc == 0 and out.exists() else None
-        if rc == 0 and d_src and d_out and abs(d_src - d_out) <= tol:
+        if verify_conversion(rc, d_src, d_out, tol):
             src.unlink()
             say(f"OK {src.name} -> {out.name} (verified, source deleted)")
             return True
@@ -233,18 +287,9 @@ def mka_to_mp3():
 # ---------- 8 and 9. Folder renames ----------
 
 def rename_folders(root, needle, replacement, label):
-    # Deepest first, so a parent's path stays valid while its children are renamed.
-    dirs = sorted((p for p in root.rglob("*") if p.is_dir() and needle in p.name),
-                  key=lambda p: len(p.parts), reverse=True)
-    items, planned = [], set()
-    for d in dirs:
-        new_name = d.name.replace(needle, replacement).strip()
-        dst = d.with_name(new_name)
-        if not new_name or dst.exists() or dst in planned:
-            warn(f"SKIP '{d.name}': new name is empty or already exists")
-            continue
-        planned.add(dst)
-        items.append((d, dst))
+    items, skipped = plan_renames(root, needle, replacement)
+    for name, reason in skipped:
+        warn(f"SKIP '{name}': {reason}")
     run_actions(items, move_describe, move, label)
 
 

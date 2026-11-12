@@ -72,6 +72,23 @@ Settings for the safe tools live in `media_console/config.json`:
 Check these paths before the first run. `tv_dupes_dir` and `report_dir` are
 specific to the original setup.
 
+The tools check the config at startup. If a key is missing, has the wrong type,
+is out of range, or is misspelled, they print every problem and exit before
+doing anything.
+
+## Running the tests
+
+```bat
+cd media_console
+pip install pytest
+python -m pytest
+```
+
+The tests cover config validation, duplicate detection and ranking, folder
+rename planning (including collisions and empty names), the conversion check,
+and the guarantee that dry run and a declined confirmation change nothing. They
+do not run ffmpeg, RAR, or any real file moves on your library.
+
 ## The original launcher
 
 ```bat
