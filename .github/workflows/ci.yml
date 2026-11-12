@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    # Windows, because the tools target Windows and some code paths
+    # (registry, APPDATA, shutdown, Rar.exe paths) only behave correctly there.
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: media_console
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev dependencies
+        run: python -m pip install --upgrade pip pytest ruff
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: python -m pytest -q

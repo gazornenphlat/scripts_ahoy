@@ -1,0 +1,25 @@
+[project]
+name = "scripts-ahoy"
+version = "0.2.0"
+description = "Windows console toolkit for maintaining a media library."
+readme = "README.md"
+requires-python = ">=3.10"
+# The core tools use only the standard library.
+dependencies = []
+
+[project.optional-dependencies]
+# Needed only for the remote reboot action (menu item 15).
+winrm = ["pywinrm>=0.4"]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[tool.pytest.ini_options]
+testpaths = ["media_console/tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-exclude = ["scripts_ahoy.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B"]
+ignore = ["E501"]

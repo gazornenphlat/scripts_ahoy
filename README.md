@@ -45,7 +45,7 @@ Anything other than the confirmation word cancels.
 |---|---|---|---|
 | 1 | Fix music duplicates | Moves audio into unique subfolders | Preview, confirm |
 | 2 | Plex refresh | Asks Plex to rescan the sections in config | Non-destructive; confirm with `APPLY` |
-| 3 | Scan duplicates | Writes a report only | Never deletes |
+| 3 | Scan duplicates | Writes a report ranking copies by resolution, then bitrate, then container | Never deletes |
 | 4 | Reboot | Restarts the computer | 30-second delay, cancel with `shutdown /a` |
 | 5 | Archive folders | Creates `.rar`, deletes folder | Runs `rar t` before deleting |
 | 6 | FLAC to MP3 | Converts, deletes FLAC | Duration must match the source |
@@ -98,15 +98,42 @@ The tools check the config at startup. If a key is missing, has the wrong type,
 is out of range, or is misspelled, they print every problem and exit before
 doing anything.
 
+## Installing
+
+```bat
+pip install -e ".[dev]"            :: tests and lint
+pip install -e ".[winrm]"          :: adds pywinrm for remote reboot (item 15)
+```
+
+## Trying it safely: rehearsal on a sample library
+
+Before pointing the tools at real data, rehearse on a throwaway library:
+
+1. Build the sample: `python media_console\make_sample_library.py C:\Temp\media_test`
+2. Point `config.json` at the sample folders (or copy the layout into your
+   test area).
+3. Start `python media_console\tools.py`. Leave dry run **on** and run each
+   action. Check the preview matches what you expect.
+4. Turn dry run off (`D`) and run items 1, 8, 9, and 10 on the sample. Check the
+   result by hand.
+5. Run items 6 and 7 on the sample. The placeholder audio cannot be decoded,
+   so the tool should **refuse to delete** the source and say so. If it
+   deletes anything, stop and report it.
+6. Run item 5 on the sample, then check that the archives open.
+
+Only move on to real data once each step behaves as described.
+
 ## Running the tests
 
 ```bat
 cd media_console
-pip install pytest
 python -m pytest
 ```
 
-The tests (62 of them) cover config validation, duplicate detection and ranking,
+Lint runs from the repository root with `python -m ruff check .`. CI runs both
+on Windows for every push (`.github/workflows/ci.yml`).
+
+The tests (73 of them) cover config validation, duplicate detection and ranking,
 folder rename planning (including collisions and empty names), the conversion
 check, Tdarr record selection, RAR archive planning, recent-item discovery,
 registry command construction, saved-computer handling, and the guarantee that

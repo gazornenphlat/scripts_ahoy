@@ -59,6 +59,61 @@ def rank_copies(paths):
     return sorted(paths, key=lambda p: PRIORITY.get(Path(p).suffix.lower(), 4))
 
 
+def parse_ffprobe_video(text):
+    """Read (height, bitrate) from ffprobe's JSON output. Returns (None, None) if unreadable."""
+    try:
+        data = json.loads(text or "{}")
+    except json.JSONDecodeError:
+        return None, None
+    streams = data.get("streams") or []
+    height = streams[0].get("height") if streams and isinstance(streams[0], dict) else None
+    bitrate = (data.get("format") or {}).get("bit_rate")
+    try:
+        height = int(height) if height is not None else None
+    except (TypeError, ValueError):
+        height = None
+    try:
+        bitrate = int(bitrate) if bitrate is not None else None
+    except (TypeError, ValueError):
+        bitrate = None
+    return height, bitrate
+
+
+def probe_video(path, ffprobe):
+    """Return (height, bitrate) for a video file, or (None, None) if ffprobe fails."""
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=height:format=bit_rate", "-of", "json", str(path)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None, None
+    return parse_ffprobe_video(out)
+
+
+def rank_by_quality(entries):
+    """Order copies best first. entries are dicts with path, height and bitrate.
+
+    Higher resolution wins, then higher bitrate, then container preference
+    (MKV > MP4 > AVI). Copies with unknown quality sort after known ones,
+    and are then ordered by container preference alone.
+    """
+    def key(e):
+        height = e.get("height")
+        bitrate = e.get("bitrate")
+        container = PRIORITY.get(Path(e["path"]).suffix.lower(), 4)
+        return (
+            height is None,                       # unknown resolution last
+            -(height or 0),
+            bitrate is None,                      # unknown bitrate after known ones
+            -(bitrate or 0),
+            container,
+            str(e["path"]),
+        )
+    return sorted(entries, key=key)
+
+
 def plan_renames(root, needle, replacement):
     """Return (planned, skipped) for renaming folders under root.
 
@@ -147,9 +202,12 @@ def fix_music_duplicates():
 
 def scan_duplicates():
     folder = Path(CFG["tv_dupes_dir"])
+    ffprobe = CFG["ffprobe"]
     if not folder.is_dir():
         error(f"Not found: {folder}")
         return
+    if not have_command(ffprobe):
+        warn("ffprobe not found; duplicates will be ranked by container only.")
     videos = sorted(
         (Path(r) / f for r, _dirs, files in os.walk(folder) for f in files
          if f.lower().endswith(VIDEO_EXTS)),
@@ -163,13 +221,24 @@ def scan_duplicates():
         lf.write(f"Duplicate scan {now:%Y-%m-%d %H:%M:%S}\n")
         lf.write(f"Directory: {folder}\n")
         lf.write(f"Video files found: {len(videos)}\n")
-        lf.write("Ranking: MKV > MP4 > AVI. This scan deletes nothing.\n\n")
+        lf.write("Ranking: resolution, then bitrate, then MKV > MP4 > AVI. "
+                 "This scan deletes nothing.\n")
+        lf.write("Copies with 'quality unknown' could not be probed by ffprobe.\n\n")
         for ep, fs in dupes.items():
-            ranked = rank_copies(fs)
+            entries = []
+            for p in fs:
+                height, bitrate = probe_video(p, ffprobe)
+                entries.append({"path": p, "height": height, "bitrate": bitrate})
+            ranked = rank_by_quality(entries)
             lf.write(f"{ep}  ({len(fs)} copies)\n")
-            lf.write(f"  highest-ranked: {ranked[0]}\n")
-            for p in ranked[1:]:
-                lf.write(f"  review:         {p}\n")
+            for i, e in enumerate(ranked):
+                label = "highest-ranked" if i == 0 else "review        "
+                if e["height"] is None:
+                    quality = "quality unknown"
+                else:
+                    kbps = f"{e['bitrate'] // 1000} kb/s" if e["bitrate"] else "bitrate unknown"
+                    quality = f"{e['height']}p, {kbps}"
+                lf.write(f"  {label}: {e['path']}  [{quality}]\n")
             lf.write("\n")
         lf.write(f"Episodes with duplicates: {len(dupes)}\n")
 
