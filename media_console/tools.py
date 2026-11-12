@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
-"""Media console tools: menu items 1, 3-10 from scripts_ahoy.py, rewritten safely.
+"""Media console tools: every action from scripts_ahoy.py, rewritten with safety checks.
 
 Safety model:
   * Dry run is ON at startup. Dry run only previews; nothing is changed.
   * With dry run OFF, every planned change is listed first and needs a typed word.
   * Source files are deleted only after the replacement is verified.
+  * Credentials are never written to disk. Tdarr's key comes from an environment
+    variable and the WinRM password is prompted for at run time.
 """
 
+import ctypes
+import getpass
+import json
 import os
 import re
 import shutil
 import subprocess
+import sys
+import urllib.request
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-import sys
-
-from common import (AMBER, ConfigError, ask_dir, confirm, error, have_command,
+from common import (AMBER, RESET, ConfigError, ask_dir, confirm, error, have_command,
                     load_config, pause, probe_duration, say, warn)
 
 try:
@@ -330,10 +335,387 @@ def organize_files():
                 "move each file into a subfolder named after it")
 
 
+# ---------- 2. Plex refresh (non-destructive) ----------
+
+def plex_commands(scanner, sections):
+    return [[scanner, "--scan", "--refresh", "--section", str(s)] for s in sections]
+
+
+def plex_refresh():
+    scanner = CFG["plex_scanner"]
+    if not have_command(scanner):
+        error(f"Plex Media Scanner not found at {scanner}.")
+        return
+    run_actions(
+        plex_commands(scanner, CFG["plex_sections"]),
+        lambda c: f"Plex refresh: section {c[-1]}",
+        lambda c: subprocess.run(c, check=False).returncode == 0,
+        "refresh the Plex library sections listed in config.json",
+    )
+
+
+# ---------- 11. Tdarr: re-encode failed items, verify, then delete source ----------
+
+TDARR_BAD_DECISION = re.compile(r"transcode (error|cancelled)", re.IGNORECASE)
+
+
+def select_tdarr_targets(records):
+    """Keep Tdarr records whose last decision was a transcode error or cancellation."""
+    if not isinstance(records, list):
+        return []
+    return [r for r in records
+            if isinstance(r, dict)
+            and TDARR_BAD_DECISION.search(str(r.get("TranscodeDecisionMaker") or ""))]
+
+
+def unique_output_path(folder, stem, ext, exists=os.path.exists):
+    """Return folder/stem+ext, or folder/stem (n)+ext, whichever is free."""
+    candidate = Path(folder) / f"{stem}{ext}"
+    n = 1
+    while exists(str(candidate)):
+        candidate = Path(folder) / f"{stem} ({n}){ext}"
+        n += 1
+    return candidate
+
+
+def tdarr_request(payload):
+    """POST to Tdarr's cruddb API. The key is read from an environment variable."""
+    headers = {"Content-Type": "application/json"}
+    key = os.environ.get(CFG["tdarr_api_key_env"], "")
+    if key:
+        headers["x-api-key"] = key
+    req = urllib.request.Request(
+        f"{CFG['tdarr_url']}/api/v2/cruddb",
+        data=json.dumps(payload).encode(), headers=headers, method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode() or "null")
+
+
+def tdarr_cleanup():
+    handbrake, ffprobe = CFG["handbrake_cli"], CFG["ffprobe"]
+    if not have_command(handbrake):
+        error(f"HandBrakeCLI not found at {handbrake}.")
+        return
+    if not os.environ.get(CFG["tdarr_api_key_env"]):
+        warn(f"Environment variable {CFG['tdarr_api_key_env']} is not set; sending no API key.")
+    try:
+        records = tdarr_request({"data": {"collection": "FileJSONDB", "mode": "getAll"}})
+    except Exception as e:  # nothing has been changed yet
+        error(f"Could not query Tdarr at {CFG['tdarr_url']}: {e}")
+        return
+
+    finished, failed = Path(CFG["tdarr_finished_dir"]), Path(CFG["tdarr_failed_dir"])
+    ext = CFG["tdarr_out_ext"]
+    tol = float(CFG["duration_tolerance_seconds"])
+    min_bytes = int(CFG["tdarr_min_output_bytes"])
+
+    items, taken = [], set()
+    for rec in select_tdarr_targets(records):
+        raw = str(rec.get("file") or "")
+        src = Path(raw)
+        if not raw or not src.is_file():
+            warn(f"SKIP missing on disk: {raw or '(no path)'}")
+            continue
+        out = unique_output_path(finished, src.stem, ext,
+                                 exists=lambda p: p in taken or os.path.exists(p))
+        taken.add(str(out))
+        items.append({"src": src, "out": out, "doc_id": rec.get("_id")})
+
+    def describe(it):
+        return (f"encode {it['src']}  ->  {it['out']}   "
+                f"(success: delete source and Tdarr record; failure: move source to {failed})")
+
+    def act(it):
+        src, out = it["src"], it["out"]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        rc = subprocess.run(
+            [handbrake, "-i", str(src), "-o", str(out), "-e", "x265", "-r", "30", "--pfr",
+             "--all-audio", "-E", "copy", "--audio-fallback", "av_aac"],
+            capture_output=True, text=True, check=False,
+        ).returncode
+        size_ok = out.is_file() and out.stat().st_size >= min_bytes
+        d_src = probe_duration(src, ffprobe)
+        d_out = probe_duration(out, ffprobe) if size_ok else None
+        if size_ok and verify_conversion(rc, d_src, d_out, tol):
+            src.unlink()
+            say(f"OK {out.name} (verified, source deleted)")
+            if it["doc_id"]:
+                try:
+                    tdarr_request({"data": {"collection": "FileJSONDB",
+                                            "mode": "removeOne", "docID": it["doc_id"]}})
+                except Exception as e:
+                    warn(f"Source deleted, but the Tdarr record could not be removed: {e}")
+            return True
+        out.unlink(missing_ok=True)  # out was chosen to be a free name, so this is ours
+        failed.mkdir(parents=True, exist_ok=True)
+        dest = unique_output_path(failed, src.stem, src.suffix)
+        try:
+            shutil.move(str(src), str(dest))
+            outcome = f"source moved to {dest}"
+        except OSError as e:
+            outcome = f"source kept (could not move: {e})"
+        error(f"FAILED {src.name} (HandBrake exit {rc}, output "
+              f"{'ok' if size_ok else 'missing or too small'}); {outcome}")
+        return False
+
+    run_actions(items, describe, act,
+                "re-encode Tdarr error/cancelled items, verify, then DELETE each source",
+                word="DELETE")
+
+
+# ---------- 12. RAR wizard (creates archives; never deletes sources) ----------
+
+RAR_MODES = {
+    "1": "Each file in the folder, one archive per file (no subfolders)",
+    "2": "Every file in the folder and subfolders, one archive per file, no paths",
+    "3": "All files in the folder into one archive (no subfolders)",
+    "4": "All files in the folder and subfolders into one archive",
+    "5": "All files in the folder and subfolders into one archive, no paths",
+}
+BAD_NAME_CHARS = set('\\/:*?"<>|')
+
+
+def rar_wizard_plan(folder, mode, name, stamp, rar):
+    """Return (items, skipped) for a RAR mode 1-5.
+
+    Each item is (cwd, command, archive_path, file_count). Commands run inside
+    the folder with relative names, so archives never store absolute paths.
+    Existing archives are skipped, never updated.
+    """
+    folder = Path(folder)
+    items, skipped, planned = [], [], set()
+
+    def add(archive, names, switches):
+        if (folder / archive).exists() or archive in planned:
+            skipped.append(f"{archive} already exists or is planned twice")
+            return
+        planned.add(archive)
+        items.append((folder, [rar, "a", *switches, archive, *names],
+                      folder / archive, len(names)))
+
+    direct = sorted(p.name for p in folder.iterdir() if p.is_file())
+    recursive = sorted(str(p.relative_to(folder)) for p in folder.rglob("*") if p.is_file())
+    if mode == 1:
+        for f in direct:
+            add(f"{Path(f).stem}.rar", [f], [])
+    elif mode == 2:
+        for rel in recursive:
+            add(f"{Path(rel).stem}.rar", [rel], ["-ep"])
+    elif mode == 3 and direct:
+        add(f"{name}_{stamp}.rar", direct, [])
+    elif mode == 4 and recursive:
+        add(f"{name}.rar", recursive, [])
+    elif mode == 5 and recursive:
+        add(f"{name}_{stamp}.rar", recursive, ["-ep"])
+    return items, skipped
+
+
+def rar_act(item):
+    cwd, command, archive, count = item
+    rc = subprocess.run(command, cwd=str(cwd), check=False).returncode
+    if rc == 0 and archive.is_file():
+        say(f"OK {archive.name} ({count} file(s))")
+        return True
+    archive.unlink(missing_ok=True)  # planning confirmed this archive did not exist
+    error(f"FAILED {archive.name} (rar exit {rc})")
+    return False
+
+
+def winrar_wizard():
+    rar = CFG["rar_path"]
+    if not have_command(rar):
+        error(f"Rar.exe not found at {rar}.")
+        return
+    folder = ask_dir("Target folder: ")
+    if not folder:
+        return
+    for key, text in RAR_MODES.items():
+        say(f"{key}) {text}")
+    mode = input(f"{AMBER}Mode (1-5): {RESET}").strip()
+    if mode not in RAR_MODES:
+        warn("No valid mode selected.")
+        return
+    name = "archive"
+    if mode in ("3", "4", "5"):
+        name = input(f"{AMBER}Base name for the archive: {RESET}").strip() or "archive"
+        if any(c in BAD_NAME_CHARS for c in name):
+            error("Name must not contain \\ / : * ? \" < > |")
+            return
+    stamp = datetime.now().strftime("%m-%d-%Y-%H%M%S")
+    items, skipped = rar_wizard_plan(folder, int(mode), name, stamp, rar)
+    for s in skipped:
+        warn(f"SKIP {s}")
+    run_actions(items,
+                lambda it: f"{it[2].name}  <-  {it[3]} file(s) from {it[0]}",
+                rar_act,
+                f"create {len(items)} archive(s); no source files are deleted",
+                word="APPLY")
+
+
+# ---------- 13. Reset recent items ----------
+
+def recent_item_files(appdata):
+    base = Path(appdata) / "Microsoft" / "Windows" / "Recent"
+    found = []
+    for sub in (base, base / "AutomaticDestinations", base / "CustomDestinations"):
+        if sub.is_dir():
+            found.extend(p for p in sorted(sub.iterdir()) if p.is_file())
+    return found
+
+
+def delete_file(path):
+    try:
+        path.unlink()
+        return True
+    except OSError as e:
+        error(f"Could not remove {path}: {e}")
+        return False
+
+
+def reset_recent():
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        error("APPDATA is not set; this action only works on Windows.")
+        return
+    run_actions(recent_item_files(appdata), lambda p: f"delete {p}", delete_file,
+                "delete Windows recent-item and jump-list files", word="DELETE")
+
+
+# ---------- 14. Explorer context menu entries (registry; needs administrator) ----------
+
+CONTEXT_HANDLERS = [
+    ("{C2FBB630-2971-11D1-A18C-00C04FD75D13}", "Copy To"),
+    ("{C2FBB631-2971-11D1-A18C-00C04FD75D13}", "Move To"),
+]
+
+
+def context_menu_commands():
+    base = r"HKEY_CLASSES_ROOT\AllFilesystemObjects\shellex\ContextMenuHandlers"
+    return [["reg", "add", f"{base}\\{clsid}", "/ve", "/d", label, "/f"]
+            for clsid, label in CONTEXT_HANDLERS]
+
+
+def is_admin():
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):  # not Windows, or the check is unavailable
+        return False
+
+
+def context_menu_register():
+    if not is_admin():
+        warn("Not running as administrator: the registry changes will fail. "
+             "Restart the console as administrator to apply them.")
+    run_actions(context_menu_commands(), lambda c: " ".join(c),
+                lambda c: subprocess.run(c, check=False).returncode == 0,
+                "add 'Copy To' and 'Move To' to the Explorer context menu (registry)")
+
+
+# ---------- 15. Remote reboot over WinRM ----------
+# Saved file holds host and username only. Passwords are prompted for at reboot time.
+
+def load_saved_computers(path):
+    path = Path(path)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise ValueError(f"cannot read {path}: {e}") from None
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return data
+
+
+def save_computers(path, computers):
+    Path(path).write_text(json.dumps(computers, indent=4), encoding="utf-8")
+
+
+def validate_computer(name, host, username):
+    """Return a problem description, or None if the entry is acceptable."""
+    if not name.strip():
+        return "name must not be empty"
+    if not host.strip():
+        return "host must not be empty"
+    if not username.strip():
+        return "username must not be empty"
+    if any(c in host for c in " /\\"):
+        return "host must not contain spaces or slashes"
+    return None
+
+
+def winrm_shutdown(host, username, password):
+    import winrm  # imported here so the other tools work without pywinrm installed
+    scheme = "https" if CFG["winrm_use_https"] else "http"
+    session = winrm.Session(f"{scheme}://{host}:{CFG['winrm_port']}/wsman",
+                            auth=(username, password), transport="ntlm")
+    result = session.run_cmd("shutdown /r /t 0")
+    if result.status_code != 0:
+        detail = result.std_err.decode(errors="replace").strip()
+        raise RuntimeError(detail or f"exit code {result.status_code}")
+
+
+def winrm_reboot():
+    path = CFG["windows_computers_file"]
+    try:
+        computers = load_saved_computers(path)
+    except ValueError as e:
+        error(str(e))
+        return
+    say("--- Saved Windows computers ---", AMBER)
+    names = list(computers)
+    for i, name in enumerate(names, 1):
+        c = computers[name]
+        say(f"{i}) {name}  ({c.get('username')}@{c.get('host')})")
+    say("A) Add a computer    Enter) cancel")
+    choice = input(f"{AMBER}Select: {RESET}").strip().upper()
+
+    if choice == "A":
+        name = input("Friendly name: ").strip()
+        host = input("Host or IP: ").strip()
+        user = input("Username (e.g. Administrator or DOMAIN\\User): ").strip()
+        problem = validate_computer(name, host, user)
+        if problem:
+            error(problem)
+        elif name in computers:
+            error(f"'{name}' already exists")
+        elif DRY_RUN:
+            warn(f"DRY RUN: would save '{name}' to {path}")
+        else:
+            computers[name] = {"host": host, "username": user}
+            save_computers(path, computers)
+            say(f"Saved '{name}'. No password was stored.")
+        return
+
+    if not choice.isdigit() or not 1 <= int(choice) <= len(names):
+        return
+    name = names[int(choice) - 1]
+    comp = computers[name]
+    host, user = comp.get("host", ""), comp.get("username", "")
+
+    def describe(it):
+        return f"REBOOT '{it[0]}' ({user}@{host}:{CFG['winrm_port']}) via WinRM"
+
+    def act(it):
+        password = getpass.getpass(f"Password for {user}@{host}: ")
+        try:
+            winrm_shutdown(host, user, password)
+            say(f"Reboot signal sent to {host}.")
+            return True
+        except Exception as e:
+            error(f"FAILED {host}: {e}")
+            return False
+
+    run_actions([(name, comp)], describe, act,
+                f"reboot Windows host '{name}' ({host}) now", word="REBOOT")
+
+
 # ---------- menu ----------
 
 ACTIONS = {
     "1": ("FIX MUSIC DUPLICATES", fix_music_duplicates),
+    "2": ("PLEX REFRESH (non-destructive)", plex_refresh),
     "3": ("SCAN DUPLICATES (report only)", scan_duplicates),
     "4": ("REBOOT (delayed, cancellable)", reboot),
     "5": ("ARCHIVE FOLDERS (RAR, verify, delete)", compress_folders),
@@ -342,14 +724,20 @@ ACTIONS = {
     "8": ("RENAME FOLDERS: REMOVE TEXT", remove_text_from_folders),
     "9": ("REMOVE UNDERSCORES FROM FOLDERS", underscores_to_spaces),
     "10": ("ORGANIZE FILES INTO FOLDERS", organize_files),
+    "11": ("TDARR CLEANUP (re-encode, verify, delete)", tdarr_cleanup),
+    "12": ("WINRAR WIZARD (creates archives only)", winrar_wizard),
+    "13": ("RESET RECENT ITEMS (deletes history)", reset_recent),
+    "14": ("ADD COPY/MOVE TO CONTEXT MENU (admin)", context_menu_register),
+    "15": ("WINDOWS REMOTE REBOOT (WinRM)", winrm_reboot),
 }
 
 
 def main():
     global DRY_RUN
     while True:
-        say("=== MEDIA CONSOLE: SAFE TOOLS ===", AMBER)
-        for key, (name, _fn) in ACTIONS.items():
+        say("=== MEDIA CONSOLE ===", AMBER)
+        for key in sorted(ACTIONS, key=int):
+            name, _fn = ACTIONS[key]
             say(f"{key}) {name}")
         say("D) Toggle dry run    Q) Quit")
         state = "ON (preview only)" if DRY_RUN else "OFF (changes apply after confirm)"

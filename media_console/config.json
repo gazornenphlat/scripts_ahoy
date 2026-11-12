@@ -2,8 +2,20 @@
     "ffmpeg": "ffmpeg",
     "ffprobe": "ffprobe",
     "rar_path": "C:\\Program Files\\WinRAR\\Rar.exe",
+    "handbrake_cli": "C:\\Program Files\\HandBrake\\HandBrakeCLI.exe",
+    "plex_scanner": "d:\\Plex\\Plex Media Server\\Plex Media Scanner.exe",
+    "plex_sections": [67, 3, 60, 71, 73, 74, 75, 5],
     "tv_dupes_dir": "N:\\TV Shows\\D",
     "report_dir": "N:\\",
+    "tdarr_url": "http://10.120.1.147:8265",
+    "tdarr_api_key_env": "TDARR_API_KEY",
+    "tdarr_out_ext": ".mkv",
+    "tdarr_finished_dir": "N:\\aaa_finished",
+    "tdarr_failed_dir": "N:\\aaa_failed",
+    "tdarr_min_output_bytes": 1048576,
     "duration_tolerance_seconds": 1.0,
-    "reboot_delay_seconds": 30
+    "reboot_delay_seconds": 30,
+    "windows_computers_file": "windows_computers.json",
+    "winrm_port": 5985,
+    "winrm_use_https": false
 }

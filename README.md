@@ -9,18 +9,18 @@ The repository has two parts:
 | Path | What it is |
 |---|---|
 | `scripts_ahoy.py` | The original menu-driven launcher, with 16 actions. Kept for reference and for the actions not yet ported. |
-| `media_console/` | A safer rewrite of the file-changing actions (menu items 1, 3–10). Previews changes, asks for confirmation, and verifies conversions before deleting sources. |
+| `media_console/` | A safer rewrite of every action in the launcher (menu items 1–15). Previews changes, asks for confirmation, and verifies conversions and encodes before deleting sources. |
 
 ## Requirements
 
 - Windows 10 or 11
 - Python 3.10 or newer
 - Optional, depending on which actions you use:
-  - [ffmpeg](https://ffmpeg.org/) and ffprobe (FLAC/MKA conversion)
-  - WinRAR's console `Rar.exe` (folder archiving)
-  - HandBrakeCLI (Tdarr cleanup, original launcher only)
-  - Plex Media Scanner (Plex refresh, original launcher only)
-  - `pywinrm` (`pip install pywinrm`, remote reboot, original launcher only)
+  - [ffmpeg](https://ffmpeg.org/) and ffprobe (FLAC/MKA conversion, Tdarr verification)
+  - WinRAR's console `Rar.exe` (folder archiving, RAR wizard)
+  - HandBrakeCLI (Tdarr cleanup)
+  - Plex Media Scanner (Plex refresh)
+  - `pywinrm` (`pip install pywinrm`, remote reboot)
 
 ## Quick start: the safe tools
 
@@ -44,6 +44,7 @@ Anything other than the confirmation word cancels.
 | # | Action | Changes files? | Safety |
 |---|---|---|---|
 | 1 | Fix music duplicates | Moves audio into unique subfolders | Preview, confirm |
+| 2 | Plex refresh | Asks Plex to rescan the sections in config | Non-destructive; confirm with `APPLY` |
 | 3 | Scan duplicates | Writes a report only | Never deletes |
 | 4 | Reboot | Restarts the computer | 30-second delay, cancel with `shutdown /a` |
 | 5 | Archive folders | Creates `.rar`, deletes folder | Runs `rar t` before deleting |
@@ -52,6 +53,11 @@ Anything other than the confirmation word cancels.
 | 8 | Remove text from folder names | Renames folders | Skips empty or colliding names |
 | 9 | Underscores to spaces | Renames folders | Skips empty or colliding names |
 | 10 | Organize files | Moves files into folders | Skips existing destinations |
+| 11 | Tdarr cleanup | Re-encodes Tdarr error/cancelled items; deletes source and Tdarr record on success | Checks output size and duration; on failure the source is moved to the failed folder, not deleted |
+| 12 | WinRAR wizard | Creates RAR archives from a folder | Never deletes sources; skips existing archives |
+| 13 | Reset recent items | Deletes Windows Recent and jump-list files | Confirm with `DELETE` |
+| 14 | Context menu entries | Adds "Copy To" and "Move To" to Explorer | Needs administrator; warns if not admin |
+| 15 | Remote reboot (WinRM) | Reboots a saved Windows host | Saves host and username only; password is prompted at reboot time; confirm with `REBOOT` |
 
 ## Configuration
 
@@ -62,15 +68,31 @@ Settings for the safe tools live in `media_console/config.json`:
     "ffmpeg": "ffmpeg",
     "ffprobe": "ffprobe",
     "rar_path": "C:\\Program Files\\WinRAR\\Rar.exe",
+    "handbrake_cli": "C:\\Program Files\\HandBrake\\HandBrakeCLI.exe",
+    "plex_scanner": "d:\\Plex\\Plex Media Server\\Plex Media Scanner.exe",
+    "plex_sections": [67, 3, 60, 71, 73, 74, 75, 5],
     "tv_dupes_dir": "N:\\TV Shows\\D",
     "report_dir": "N:\\",
+    "tdarr_url": "http://10.120.1.147:8265",
+    "tdarr_api_key_env": "TDARR_API_KEY",
+    "tdarr_out_ext": ".mkv",
+    "tdarr_finished_dir": "N:\\aaa_finished",
+    "tdarr_failed_dir": "N:\\aaa_failed",
+    "tdarr_min_output_bytes": 1048576,
     "duration_tolerance_seconds": 1.0,
-    "reboot_delay_seconds": 30
+    "reboot_delay_seconds": 30,
+    "windows_computers_file": "windows_computers.json",
+    "winrm_port": 5985,
+    "winrm_use_https": false
 }
 ```
 
-Check these paths before the first run. `tv_dupes_dir` and `report_dir` are
-specific to the original setup.
+Check these paths before the first run. Several are specific to the original
+setup (the `N:` drive, the Tdarr address, and the Plex section IDs).
+
+Secrets are never stored in the config. Tdarr's API key is read from the
+environment variable named in `tdarr_api_key_env` (set `TDARR_API_KEY` before
+starting the console). WinRM passwords are prompted for at reboot time.
 
 The tools check the config at startup. If a key is missing, has the wrong type,
 is out of range, or is misspelled, they print every problem and exit before
@@ -84,10 +106,13 @@ pip install pytest
 python -m pytest
 ```
 
-The tests cover config validation, duplicate detection and ranking, folder
-rename planning (including collisions and empty names), the conversion check,
-and the guarantee that dry run and a declined confirmation change nothing. They
-do not run ffmpeg, RAR, or any real file moves on your library.
+The tests (62 of them) cover config validation, duplicate detection and ranking,
+folder rename planning (including collisions and empty names), the conversion
+check, Tdarr record selection, RAR archive planning, recent-item discovery,
+registry command construction, saved-computer handling, and the guarantee that
+dry run and a declined confirmation change nothing. They do not contact a Tdarr
+server or WinRM host, run ffmpeg, RAR or HandBrake, touch the registry, or move
+files on your library.
 
 ## The original launcher
 
@@ -108,11 +133,13 @@ the original's behaviour before running it on data you care about.
   need encryption.
 - **The safe tools are not yet tested on Windows** in this repository. Run
   them on a copy of a small test folder first.
-- **Items 2, 11–15 of the original** (Plex refresh, Tdarr cleanup, WinRAR
-  wizard, reset recent items, context menu registration, remote reboot) are
-  only in `scripts_ahoy.py`.
 - **Verification depends on ffprobe.** If it cannot read a duration, the
   source file is kept.
+- **Tdarr and WinRM actions are untested against real servers.** The request
+  and command formats were copied from the original launcher; check one
+  record or one host before running them on a whole library.
+- **The original launcher is unchanged.** `scripts_ahoy.py` keeps its original
+  behaviour, including the bugs noted earlier. Prefer `media_console`.
 - **Hard-coded paths in the original.** The launcher still contains paths and
   IP addresses from its original setup. Move them to a config file before
   using it elsewhere.
@@ -122,8 +149,8 @@ the original's behaviour before running it on data you care about.
 - Deleting actions are irreversible. Keep backups of anything important.
 - Dry run is on at startup in `media_console`. Leave it on until you have read
   the preview for each action.
-- Do not commit `windows_computers.json`. It holds remote hosts and usernames.
-  Add it to `.gitignore`.
+- `windows_computers.json` holds remote hosts and usernames, and is listed in
+  `.gitignore`, so it is not committed. It never holds passwords.
 
 ## Licence
 

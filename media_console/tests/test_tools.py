@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 import tools
 from tools import (find_episode_dupes, plan_renames, rank_copies,
                    run_actions, verify_conversion)
