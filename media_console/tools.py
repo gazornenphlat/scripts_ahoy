@@ -139,6 +139,35 @@ def plan_renames(root, needle, replacement):
     return planned, skipped
 
 
+def count_streams(path, ffprobe, kind):
+    """Number of streams of kind 'a' (audio) or 'v' (video). 0 if unreadable or missing."""
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", kind,
+             "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return 0
+    return len([line for line in out.splitlines() if line.strip()])
+
+
+def decodes_cleanly(path, ffmpeg):
+    """Fully decode the file and report failure on any error.
+
+    This catches truncated or corrupt output that still has the right duration
+    on paper. It is slow on long files, so it runs only after the cheaper checks pass.
+    """
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-v", "error", "-xerror", "-i", str(path), "-f", "null", "-"],
+            capture_output=True, text=True, check=False,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0 and not result.stderr.strip()
+
+
 def verify_conversion(return_code, duration_src, duration_out, tolerance):
     """True only if ffmpeg succeeded and both durations are known and match within tolerance."""
     if return_code != 0 or not duration_src or not duration_out:
@@ -331,7 +360,10 @@ def convert_to_mp3(sources, extra, label):
         ).returncode
         d_src = probe_duration(src, ffprobe)
         d_out = probe_duration(out, ffprobe) if rc == 0 and out.exists() else None
-        if verify_conversion(rc, d_src, d_out, tol):
+        # Cheap checks first; the slow decode only runs if they all pass.
+        if (verify_conversion(rc, d_src, d_out, tol)
+                and count_streams(out, ffprobe, "a") >= 1
+                and decodes_cleanly(out, ffmpeg)):
             src.unlink()
             say(f"OK {src.name} -> {out.name} (verified, source deleted)")
             return True
@@ -506,7 +538,10 @@ def tdarr_cleanup():
         size_ok = out.is_file() and out.stat().st_size >= min_bytes
         d_src = probe_duration(src, ffprobe)
         d_out = probe_duration(out, ffprobe) if size_ok else None
-        if size_ok and verify_conversion(rc, d_src, d_out, tol):
+        # Cheap checks first; the slow decode only runs if they all pass.
+        if (size_ok and verify_conversion(rc, d_src, d_out, tol)
+                and count_streams(out, ffprobe, "v") >= 1
+                and decodes_cleanly(out, CFG["ffmpeg"])):
             src.unlink()
             say(f"OK {out.name} (verified, source deleted)")
             if it["doc_id"]:

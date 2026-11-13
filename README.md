@@ -48,12 +48,12 @@ Anything other than the confirmation word cancels.
 | 3 | Scan duplicates | Writes a report ranking copies by resolution, then bitrate, then container | Never deletes |
 | 4 | Reboot | Restarts the computer | 30-second delay, cancel with `shutdown /a` |
 | 5 | Archive folders | Creates `.rar`, deletes folder | Runs `rar t` before deleting |
-| 6 | FLAC to MP3 | Converts, deletes FLAC | Duration must match the source |
-| 7 | MKA to MP3 | Converts, deletes MKA | Duration must match the source |
+| 6 | FLAC to MP3 | Converts, deletes FLAC | Duration must match the source, output must have audio, and must decode with no errors |
+| 7 | MKA to MP3 | Converts, deletes MKA | Same checks as item 6 |
 | 8 | Remove text from folder names | Renames folders | Skips empty or colliding names |
 | 9 | Underscores to spaces | Renames folders | Skips empty or colliding names |
 | 10 | Organize files | Moves files into folders | Skips existing destinations |
-| 11 | Tdarr cleanup | Re-encodes Tdarr error/cancelled items; deletes source and Tdarr record on success | Checks output size and duration; on failure the source is moved to the failed folder, not deleted |
+| 11 | Tdarr cleanup | Re-encodes Tdarr error/cancelled items; deletes source and Tdarr record on success | Checks output size, duration, video stream, and full decode; on failure the source is moved to the failed folder, not deleted |
 | 12 | WinRAR wizard | Creates RAR archives from a folder | Never deletes sources; skips existing archives |
 | 13 | Reset recent items | Deletes Windows Recent and jump-list files | Confirm with `DELETE` |
 | 14 | Context menu entries | Adds "Copy To" and "Move To" to Explorer | Needs administrator; warns if not admin |
