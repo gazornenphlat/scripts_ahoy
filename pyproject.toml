@@ -18,7 +18,7 @@ testpaths = ["media_console/tests"]
 [tool.ruff]
 line-length = 110
 target-version = "py310"
-extend-exclude = ["scripts_ahoy.py"]
+extend-exclude = ["legacy"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "B"]

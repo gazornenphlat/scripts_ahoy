@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Media console tools: every action from scripts_ahoy.py, rewritten with safety checks.
+"""Media console tools: every action from legacy/scripts_ahoy.py, rewritten with safety checks.
 
 Safety model:
   * Dry run is ON at startup. Dry run only previews; nothing is changed.

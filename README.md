@@ -8,7 +8,7 @@ The repository has two parts:
 
 | Path | What it is |
 |---|---|
-| `scripts_ahoy.py` | The original menu-driven launcher, with 16 actions. Kept for reference and for the actions not yet ported. |
+| `legacy/scripts_ahoy.py` | The original menu-driven launcher, kept for reference only. Superseded by `media_console`. |
 | `media_console/` | A safer rewrite of every action in the launcher (menu items 1–15). Previews changes, asks for confirmation, and verifies conversions and encodes before deleting sources. |
 
 ## Requirements
@@ -141,16 +141,16 @@ dry run and a declined confirmation change nothing. They do not contact a Tdarr
 server or WinRM host, run ffmpeg, RAR or HandBrake, touch the registry, or move
 files on your library.
 
-## The original launcher
+## Legacy: the original launcher
 
-```bat
-python scripts_ahoy.py
-```
+`legacy/scripts_ahoy.py` is the original menu-driven launcher, kept for
+reference only. Do not use it for real work. It is superseded by
+`media_console`, which covers all of its actions with safety checks.
 
 It is a menu of 16 actions. Each one writes a helper script to the temp folder
 and opens it in a new `cmd` window. Several actions delete source files
-without a confirmation step. Use the `media_console` tools for those, or review
-the original's behaviour before running it on data you care about.
+without a confirmation step, and it has known bugs (for example, an undefined
+`winrarPath` variable in the encrypt action).
 
 ## Known limitations
 
@@ -165,11 +165,8 @@ the original's behaviour before running it on data you care about.
 - **Tdarr and WinRM actions are untested against real servers.** The request
   and command formats were copied from the original launcher; check one
   record or one host before running them on a whole library.
-- **The original launcher is unchanged.** `scripts_ahoy.py` keeps its original
-  behaviour, including the bugs noted earlier. Prefer `media_console`.
-- **Hard-coded paths in the original.** The launcher still contains paths and
-  IP addresses from its original setup. Move them to a config file before
-  using it elsewhere.
+- **The legacy launcher is unchanged.** `legacy/scripts_ahoy.py` keeps its
+  original behaviour and hard-coded paths. Prefer `media_console`.
 
 ## Safety notes
 
