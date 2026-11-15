@@ -133,7 +133,7 @@ python -m pytest
 Lint runs from the repository root with `python -m ruff check .`. CI runs both
 on Windows for every push (`.github/workflows/ci.yml`).
 
-The tests (73 of them) cover config validation, duplicate detection and ranking,
+The tests (79 of them) cover config validation, duplicate detection and ranking,
 folder rename planning (including collisions and empty names), the conversion
 check, Tdarr record selection, RAR archive planning, recent-item discovery,
 registry command construction, saved-computer handling, and the guarantee that
@@ -149,8 +149,12 @@ reference only. Do not use it for real work. It is superseded by
 
 It is a menu of 16 actions. Each one writes a helper script to the temp folder
 and opens it in a new `cmd` window. Several actions delete source files
-without a confirmation step, and it has known bugs (for example, an undefined
-`winrarPath` variable in the encrypt action).
+without the verification the rewrite performs. The file now requires typing
+`LEGACY` at startup before it shows the menu, and its reboot action requires
+typing `REBOOT`; the `winrarPath` crash in the encrypt action is fixed.
+The JDownloader watch-folder action was defined but never wired into the
+menu, so it was removed rather than carried over; the rewrite has no
+equivalent for it.
 
 ## Known limitations
 
@@ -165,8 +169,10 @@ without a confirmation step, and it has known bugs (for example, an undefined
 - **Tdarr and WinRM actions are untested against real servers.** The request
   and command formats were copied from the original launcher; check one
   record or one host before running them on a whole library.
-- **The legacy launcher is unchanged.** `legacy/scripts_ahoy.py` keeps its
-  original behaviour and hard-coded paths. Prefer `media_console`.
+- **The legacy launcher is guarded, not made safe.** `legacy/scripts_ahoy.py`
+  now requires typing `LEGACY` at startup and `REBOOT` before rebooting, but
+  its actions still delete without verification and its paths are hard-coded.
+  Prefer `media_console`.
 
 ## Safety notes
 

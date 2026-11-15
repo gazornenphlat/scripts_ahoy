@@ -7,7 +7,7 @@
     "plex_sections": [67, 3, 60, 71, 73, 74, 75, 5],
     "tv_dupes_dir": "N:\\TV Shows\\D",
     "report_dir": "N:\\",
-    "tdarr_url": "http://10.120.1.147:8265",
+    "tdarr_url": "https://10.120.1.147:8265",
     "tdarr_api_key_env": "TDARR_API_KEY",
     "tdarr_out_ext": ".mkv",
     "tdarr_finished_dir": "N:\\aaa_finished",

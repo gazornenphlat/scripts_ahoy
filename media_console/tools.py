@@ -22,8 +22,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from common import (AMBER, RESET, ConfigError, ask_dir, confirm, error, have_command,
-                    load_config, pause, probe_duration, say, warn)
+from common import (AMBER, BASE_DIR, RESET, ConfigError, ask_dir, confirm, error,
+                    have_command, load_config, pause, probe_duration, say, warn)
 
 try:
     CFG = load_config()
@@ -499,7 +499,11 @@ def tdarr_cleanup():
         error(f"HandBrakeCLI not found at {handbrake}.")
         return
     if not os.environ.get(CFG["tdarr_api_key_env"]):
-        warn(f"Environment variable {CFG['tdarr_api_key_env']} is not set; sending no API key.")
+        # Fail closed: never query or delete through the Tdarr API without
+        # its credential. Set the variable named in tdarr_api_key_env first.
+        error(f"Environment variable {CFG['tdarr_api_key_env']} is not set; "
+              "refusing to run Tdarr cleanup without an API key.")
+        return
     try:
         records = tdarr_request({"data": {"collection": "FileJSONDB", "mode": "getAll"}})
     except Exception as e:  # nothing has been changed yet
@@ -761,7 +765,9 @@ def winrm_shutdown(host, username, password):
 
 
 def winrm_reboot():
-    path = CFG["windows_computers_file"]
+    path = Path(CFG["windows_computers_file"])
+    if not path.is_absolute():
+        path = BASE_DIR / path
     try:
         computers = load_saved_computers(path)
     except ValueError as e:
