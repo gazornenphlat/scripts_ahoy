@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """MEDIA_N - Hacker Aesthetic Media Console.
 
+LEGACY - SUPERSEDED BY media_console. Kept for reference only.
+Do not use it for real work: its actions delete source files
+without the verification the rewrite performs, and its reboot
+is immediate. Running this file requires typing LEGACY at startup.
+
 Combined, menu-driven media utility.
 
 Design reference: design.md (Hacker Aesthetic CRT/CLI)
@@ -8,7 +13,7 @@ Design reference: design.md (Hacker Aesthetic CRT/CLI)
   - VT323 monospace type, amber accents (#FFB200), red error state (#FF3333)
   - ASCII art, command-line interface, retro CRT feel
 
-Each action creates a helper script, runs it in a new window, then deletes it.
+Each action creates a helper script and runs it in a new window.
 """
 
 import os
@@ -41,7 +46,6 @@ ASCII_LOGO = [
     "  +" + "-" * 40 + "+  ",
 ]
 
-JDOWNLOADER_DIR = r"C:\Users\Bobu\AppData\Local\JDownloader 2.0\folderwatch"
 PLEX_SCANNER = r"d:\Plex\Plex Media Server\Plex Media Scanner.exe"
 PLEX_SECTIONS = [67, 3, 60, 71, 73, 74, 75, 5]
 
@@ -60,10 +64,6 @@ def build_folderbat_content() -> str:
         "pause",
         'del "%%~f0"',
     ]) + "\r\n"
-
-
-def build_del_batch_content(directory: str) -> str:
-    return "@echo off\r\n@del /q \"" + directory + r"\*" + "\" > nul 2>&1\r\necho JDownloader watch folder cleared.\r\npause\r\n"
 
 
 def build_plex_batch_content() -> str:
@@ -426,7 +426,7 @@ def main():
         return 1
 
     if not os.path.exists(winrar_path) and shutil.which("rar") is None:
-        print(f"{R}WinRAR not found at '{winrarPath}' or in PATH.{R}")
+        print(f"{R}WinRAR not found at '{winrar_path}' or in PATH.{R}")
         input(f"\n{A}Press Enter to close...{R}")
         return 1
 
@@ -878,7 +878,7 @@ def show_banner() -> None:
         print(f"{GREEN}{line.rstrip()}{RESET}")
 
 
-def create_run_and_delete(script_path: str, content: str, runner: str = "cmd") -> None:
+def create_and_run(script_path: str, content: str, runner: str = "cmd") -> None:
     with open(script_path, "w", encoding="utf-8", newline="\r\n") as fh:
         fh.write(content)
     
@@ -901,61 +901,61 @@ def action_organize_media() -> None:
         if not os.path.isdir(p):
             continue
         script = os.path.join(p, "folder.bat")
-        create_run_and_delete(script, build_folderbat_content(), runner="cmd")
+        create_and_run(script, build_folderbat_content(), runner="cmd")
     say("ORGANIZE MEDIA SPAWNED", GREEN)
-
-
-def action_clear_jdownloader() -> None:
-    script = os.path.join(tempfile.gettempdir(), "media_tool_jdownloader.bat")
-    create_run_and_delete(script, build_del_batch_content(JDOWNLOADER_DIR), runner="cmd")
-    say("CLEAR JDOWNLOADER SPAWNED", GREEN)
 
 
 def action_plex_refresh() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_plex.bat")
-    create_run_and_delete(script, build_plex_batch_content(), runner="cmd")
+    create_and_run(script, build_plex_batch_content(), runner="cmd")
     say("PLEX REFRESH SPAWNED", GREEN)
 
 
 def action_scan_duplicates() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_dupes.py")
-    create_run_and_delete(script, build_dupes_py_content(), runner="python")
+    create_and_run(script, build_dupes_py_content(), runner="python")
     say("SCAN DUPLICATES SPAWNED", GREEN)
 
 
 def action_reboot() -> None:
+    # The generated batch reboots immediately (shutdown /r /f /t 0),
+    # so require a typed confirmation before spawning it.
+    answer = input(f"{AMBER}TYPE REBOOT TO CONFIRM, ANYTHING ELSE TO CANCEL: {RESET}").strip()
+    if answer != "REBOOT":
+        say("REBOOT CANCELLED", AMBER)
+        return
     script = os.path.join(tempfile.gettempdir(), "media_tool_reboot.bat")
-    create_run_and_delete(script, build_reboot_batch_content(), runner="cmd")
+    create_and_run(script, build_reboot_batch_content(), runner="cmd")
     say("REBOOT INITIATED", AMBER)
 
 
 def action_encrypt_folders() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_encrypt.py")
-    create_run_and_delete(script, build_encrypt_folders_py_content(), runner="python")
+    create_and_run(script, build_encrypt_folders_py_content(), runner="python")
     say("ENCRYPT FOLDERS SPAWNED", GREEN)
 
 
 def action_flac_convert() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_flac.py")
-    create_run_and_delete(script, build_flac_py_content(), runner="python")
+    create_and_run(script, build_flac_py_content(), runner="python")
     say("FLAC CONVERT SPAWNED", GREEN)
 
 
 def action_mka_convert() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_mka.py")
-    create_run_and_delete(script, build_mkaconvert_py_content(), runner="python")
+    create_and_run(script, build_mkaconvert_py_content(), runner="python")
     say("MKA CONVERT SPAWNED", GREEN)
 
 
 def action_rename_folders() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_rename_folders.py")
-    create_run_and_delete(script, build_rename_folders_py_content(), runner="python")
+    create_and_run(script, build_rename_folders_py_content(), runner="python")
     say("RENAME FOLDERS SPAWNED", GREEN)
 
 
 def action_rename_folders_remove_underscores() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_rename_underscores.py")
-    create_run_and_delete(script, build_rename_folders_remove_underscores_py_content(), runner="python")
+    create_and_run(script, build_rename_folders_remove_underscores_py_content(), runner="python")
     say("REMOVE UNDERSCORES FROM FOLDERS SPAWNED", GREEN)
 
 
@@ -968,37 +968,37 @@ def action_organize_files() -> None:
         say(f"ERROR: {target} IS NOT A DIRECTORY", RED)
         return
     script = os.path.join(tempfile.gettempdir(), "media_tool_organize.py")
-    create_run_and_delete(script, build_organize_files_py_content(target), runner="python")
+    create_and_run(script, build_organize_files_py_content(target), runner="python")
     say("ORGANIZE FILES SPAWNED", GREEN)
 
 
 def action_tdarr_cleanup() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_tdarr.py")
-    create_run_and_delete(script, build_tdarr_cleanup_py_content(), runner="python")
+    create_and_run(script, build_tdarr_cleanup_py_content(), runner="python")
     say("TDARR CLEANUP SPAWNED", GREEN)
 
 
 def action_winrar_wizard() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_winrar.py")
-    create_run_and_delete(script, build_winrar_wizard_py_content(), runner="python")
+    create_and_run(script, build_winrar_wizard_py_content(), runner="python")
     say("WINRAR WIZARD SPAWNED", GREEN)
 
 
 def action_reset_recent() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_reset_recent.py")
-    create_run_and_delete(script, build_reset_recent_py_content(), runner="python")
+    create_and_run(script, build_reset_recent_py_content(), runner="python")
     say("RESET RECENT ITEMS SPAWNED", GREEN)
 
 
 def action_context_menu_reg() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_context_menu.py")
-    create_run_and_delete(script, build_context_menu_reg_py_content(), runner="python")
+    create_and_run(script, build_context_menu_reg_py_content(), runner="python")
     say("CONTEXT MENU REG SPAWNED", GREEN)
 
 
 def action_winrm_reboot() -> None:
     script = os.path.join(tempfile.gettempdir(), "media_tool_winrm_reboot.py")
-    create_run_and_delete(script, build_winrm_reboot_py_content(), runner="python")
+    create_and_run(script, build_winrm_reboot_py_content(), runner="python")
     say("WINRM REBOOT MANAGER SPAWNED", GREEN)
 
 
@@ -1051,6 +1051,17 @@ def show_menu() -> None:
 
 
 def main() -> None:
+    # Legacy launcher: superseded by media_console. Its actions delete
+    # sources without verification and its reboot is immediate, so
+    # require a deliberate opt-in before showing the menu at all.
+    show_banner()
+    say("WARNING: LEGACY LAUNCHER - SUPERSEDED BY media_console", RED)
+    say("Actions here delete source files WITHOUT verification.", RED)
+    say("Use media_console instead unless you know exactly what this does.", RED)
+    answer = input(f"{AMBER}TYPE LEGACY TO CONTINUE, ANYTHING ELSE TO EXIT: {RESET}").strip()
+    if answer != "LEGACY":
+        say("EXITING - NOTHING WAS RUN", AMBER)
+        return
     while True:
         show_banner()
         show_menu()

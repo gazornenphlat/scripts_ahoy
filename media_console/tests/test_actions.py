@@ -44,6 +44,17 @@ def test_tdarr_select_handles_non_list_response():
     assert select_tdarr_targets(None) == []
 
 
+def test_tdarr_cleanup_refuses_to_run_without_api_key(monkeypatch):
+    # A missing TDARR_API_KEY must fail closed: the action must not query
+    # or delete through the Tdarr API without its credential.
+    monkeypatch.delenv("TDARR_API_KEY", raising=False)
+    monkeypatch.setattr(tools, "have_command", lambda cmd: True)
+    called = []
+    monkeypatch.setattr(tools, "tdarr_request", lambda payload: called.append(payload))
+    tools.tdarr_cleanup()
+    assert called == []
+
+
 def test_unique_output_path_returns_free_name(tmp_path):
     taken = {str(tmp_path / "Show.mkv"), str(tmp_path / "Show (1).mkv")}
     out = unique_output_path(tmp_path, "Show", ".mkv", exists=lambda p: p in taken)
